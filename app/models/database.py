@@ -315,7 +315,7 @@ class Database:
     def get_students(self, query=None, filters=None):
         """
         Retrieve students from the database with optional filtering.
-
+    
         :param query: Optional search query string
         :param filters: Optional dictionary of filter conditions
         :return: List of student dictionaries
@@ -352,6 +352,20 @@ class Database:
                 params.extend([search_param, search_param, search_param])
 
             # Add filtering logic
+            if filters and isinstance(filters, dict):
+                if "email" in filters and isinstance(filters["email"], str):
+                    where_conditions.append("email LIKE ?")
+                    params.append(f"%{filters['email']}%")
+
+                if "phone" in filters and isinstance(filters["phone"], str):
+                    where_conditions.append("phone LIKE ?")
+                    params.append(f"%{filters['phone']}%")
+
+                if "gender" in filters and isinstance(filters["gender"], str):
+                    where_conditions.append("gender = ?")
+                    params.append(filters["gender"])
+
+            # Add WHERE clause if conditions exist
             if where_conditions:
                 base_query += " WHERE " + " AND ".join(where_conditions)
 
@@ -368,7 +382,7 @@ class Database:
                 try:
                     # Always convert to dictionary regardless of row type
                     student = {}
-
+                
                     if isinstance(row, sqlite3.Row):
                         # Get column names from sqlite3.Row
                         for key in row.keys():
@@ -385,7 +399,7 @@ class Database:
                             'gender': row[6] if len(row) > 6 else '',
                             'face_image_path': row[8] if len(row) > 8 else ''
                         }
-
+                
                     students.append(student)
                 except Exception as row_error:
                     logging.error(f"Error processing student row: {row_error}")
@@ -1139,7 +1153,7 @@ class Database:
                 SELECT 
                     id,
                     class_id,
-                    day_of_week,
+                    days AS day_of_week,
                     start_time,
                     end_time,
                     room,
@@ -1184,6 +1198,34 @@ class Database:
         except sqlite3.Error as e:
             logging.error(f"Error getting class schedules: {e}")
             return []
+        
+    def update_attendance_note(self, attendance_id, notes):
+        """
+        Update the notes for an attendance record
+    
+        :param attendance_id: ID of the attendance record
+        :param notes: New notes text
+        :return: True if successful, False otherwise
+        """
+        try:
+            cursor = self.connection.cursor()
+         
+            cursor.execute(
+                """
+                UPDATE attendance
+                SET notes = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (notes, attendance_id)
+            )
+        
+            self.connection.commit()
+            return True
+        
+        except sqlite3.Error as e:
+            self.connection.rollback()
+            logging.error(f"Error updating attendance note: {e}")
+            return False
 
     # Behavior operations
     def record_behavior(self, class_id, student_id, behavior_type, behavior_value):
@@ -1500,21 +1542,27 @@ class Database:
                 except sqlite3.Error as column_error:
                     logging.warning(f"Could not add column '{column_name}': {column_error}")
 
-            # Make sure class_schedules table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='class_schedules'")
-            if not cursor.fetchone():
-                cursor.execute("""
-                CREATE TABLE class_schedules (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    class_id TEXT NOT NULL,
-                    days TEXT NOT NULL,
-                    start_time TEXT NOT NULL,
-                    end_time TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (class_id) REFERENCES classes (class_id)
-                )
-                """)
-                logging.info("Created missing class_schedules table")
+            # Check table structure for class_schedules table
+            cursor.execute("PRAGMA table_info(class_schedules)")
+            columns = {column[1]: column for column in cursor.fetchall()}
+        
+            # Add day_of_week column to class_schedules if it doesn't exist
+            if 'day_of_week' not in columns:
+                cursor.execute("ALTER TABLE class_schedules ADD COLUMN day_of_week TEXT")
+                # Copy data from days to day_of_week if days exists
+                if 'days' in columns:
+                    cursor.execute("UPDATE class_schedules SET day_of_week = days")
+                    logging.info("Added day_of_week column to class_schedules table")
+            
+            # Add room column to class_schedules if it doesn't exist
+            if 'room' not in columns:
+                cursor.execute("ALTER TABLE class_schedules ADD COLUMN room TEXT")
+                logging.info("Added room column to class_schedules table")
+            
+            # Add updated_at column to class_schedules if it doesn't exist
+            if 'updated_at' not in columns:
+                cursor.execute("ALTER TABLE class_schedules ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+                logging.info("Added updated_at column to class_schedules table")
 
             # Ensure default profile image exists
             default_profile_path = os.path.join(DATA_DIR, 'default_profile.png')

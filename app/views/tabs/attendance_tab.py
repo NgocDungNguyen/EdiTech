@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QDialog,
     QInputDialog,
+    QFormLayout,
+    QSpinBox,
 )
 from PyQt6.QtGui import QFont, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtCore import Qt, QDate, QTimer
@@ -96,6 +98,12 @@ class AttendanceTab(QWidget):
         self.manual_check_in_btn.setIcon(QIcon(str(ICONS_DIR / "manual_entry.png")))
         self.manual_check_in_btn.clicked.connect(self.manual_check_in)
         actions_layout.addWidget(self.manual_check_in_btn)
+    
+        # Pre-Check-In Button
+        self.pre_checkin_btn = QPushButton("Set Pre-Check-In")
+        self.pre_checkin_btn.setIcon(QIcon(str(ICONS_DIR / "clock.png")))
+        self.pre_checkin_btn.clicked.connect(self.setup_pre_checkin)
+        actions_layout.addWidget(self.pre_checkin_btn)
 
         main_layout.addLayout(actions_layout)
 
@@ -113,6 +121,13 @@ class AttendanceTab(QWidget):
         ])
         self.attendance_table.horizontalHeader().setStretchLastSection(True)
         self.attendance_table.setAlternatingRowColors(True)
+    
+        # Make the Notes column editable
+        self.attendance_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | 
+                                             QTableWidget.EditTrigger.EditKeyPressed)
+    
+        # Connect cell change signal to update notes in database
+        self.attendance_table.cellChanged.connect(self.on_attendance_cell_changed)
 
         main_layout.addWidget(self.attendance_table)
 
@@ -219,35 +234,81 @@ class AttendanceTab(QWidget):
             if not records:
                 self.status_label.setText(f"No attendance records for selected date")
                 return
+        
+            # Temporarily disconnect the cellChanged signal to prevent triggering it during loading
+            try:
+                self.attendance_table.cellChanged.disconnect(self.on_attendance_cell_changed)
+            except TypeError:
+                # Signal was not connected
+                pass
 
             # Populate table
             self.attendance_table.setRowCount(len(records))
             for row, record in enumerate(records):
-                # Convert record to string format for display
-                self.attendance_table.setItem(row, 0, QTableWidgetItem(record['student_id']))
-                self.attendance_table.setItem(row, 1, QTableWidgetItem(record['name']))
+                try:
+                    # Convert record to string format for display
+                    student_id_item = QTableWidgetItem(record.get('student_id', ''))
+                    # Store the attendance ID as hidden data for later use when editing notes
+                    student_id_item.setData(Qt.ItemDataRole.UserRole, record.get('id', ''))
+                    self.attendance_table.setItem(row, 0, student_id_item)
+                
+                    # Student name
+                    self.attendance_table.setItem(row, 1, QTableWidgetItem(record.get('name', '')))
 
-                # Format check-in time
-                check_in_time = record.get('check_in_time', '')
-                if check_in_time and len(check_in_time) > 16:  # If full timestamp
-                    check_in_time = check_in_time[11:16]  # Extract just the time HH:MM
-                self.attendance_table.setItem(row, 2, QTableWidgetItem(check_in_time))
+                    # Format check-in time
+                    check_in_time = record.get('check_in_time', '')
+                    time_display = check_in_time
+                    if check_in_time and len(check_in_time) > 16:  # If full timestamp
+                        # Extract date and time for display
+                        date_part = check_in_time[:10]  # YYYY-MM-DD
+                        time_part = check_in_time[11:16]  # HH:MM
+                        if date_str == date_part:
+                            # If same day as selected, just show time
+                            time_display = time_part
+                        else:
+                            # If different day, show date and time
+                            time_display = f"{date_part} {time_part}"
+                        
+                    self.attendance_table.setItem(row, 2, QTableWidgetItem(time_display))
 
-                # Status with color coding
-                status = record.get('status', 'Unknown')
-                status_item = QTableWidgetItem(status)
-                if status == 'Present':
-                    status_item.setBackground(QColor(200, 255, 200))  # Light green
-                elif status == 'Absent':
-                    status_item.setBackground(QColor(255, 200, 200))  # Light red
-                elif status == 'Late':
-                    status_item.setBackground(QColor(255, 255, 200))  # Light yellow
-                self.attendance_table.setItem(row, 3, status_item)
+                    # Status with color coding
+                    status = record.get('status', 'Unknown')
+                    status_item = QTableWidgetItem(status)
+                    if status == 'Present':
+                        status_item.setBackground(QColor(200, 255, 200))  # Light green
+                    elif status == 'Absent':
+                        status_item.setBackground(QColor(255, 200, 200))  # Light red
+                    elif status == 'Late':
+                        status_item.setBackground(QColor(255, 255, 200))  # Light yellow
+                    self.attendance_table.setItem(row, 3, status_item)
 
-                # Notes
-                if record.get('notes'):
-                    notes_item = QTableWidgetItem(record['notes'])
-                    self.attendance_table.setItem(row, 4, notes_item)
+                    # Location
+                    location = record.get('location', '')
+                    self.attendance_table.setItem(row, 4, QTableWidgetItem(location))
+
+                    # Notes - make editable
+                    notes = record.get('notes', '')
+                    notes_item = QTableWidgetItem(notes)
+                    self.attendance_table.setItem(row, 5, notes_item)
+                
+                except Exception as row_error:
+                    logging.error(f"Error processing attendance row {row}: {row_error}")
+                    continue
+
+            # Reconnect the cellChanged signal
+            try:
+                self.attendance_table.cellChanged.connect(self.on_attendance_cell_changed)
+            except TypeError:
+                # Signal was already connected
+                pass
+
+            # Resize columns to content
+            self.attendance_table.resizeColumnsToContents()
+        
+            # Make sure Notes column is wide enough
+            notes_column_width = self.attendance_table.columnWidth(5)
+            if notes_column_width < 200:
+                self.attendance_table.setColumnWidth(5, 200)
 
             # Update status label
             self.status_label.setText(f"Showing {len(records)} attendance records")
@@ -259,6 +320,13 @@ class AttendanceTab(QWidget):
                 self.status_label.setText(f"Error: {str(e)}")
             else:
                 logging.error("status_label not found in AttendanceTab")
+        
+            # Make sure signal gets reconnected even after error
+            try:
+                self.attendance_table.cellChanged.connect(self.on_attendance_cell_changed)
+            except TypeError:
+                # Signal was already connected
+                pass
 
     def perform_face_check_in(self):
         """Perform continuous face recognition-based check-in"""
@@ -619,36 +687,51 @@ class AttendanceTab(QWidget):
             
             check_in_time_str = check_in_time.strftime("%Y-%m-%d %H:%M:%S")
         
-            # Get class schedule to determine if student is late
-            class_schedules = self.db.get_class_schedules(class_id)
+            # Check if we're in pre-check-in mode for this class
             is_late = False
             late_minutes = 0
+            pre_checkin_active = False
         
-            if class_schedules:
-                # Find today's schedule
-                today_weekday = check_in_time.strftime("%A")  # Monday, Tuesday, etc.
-                today_schedule = None
+            if hasattr(self, 'pre_checkin_config') and self.pre_checkin_config.get('class_id') == class_id:
+                pre_checkin_active = True
+                config = self.pre_checkin_config
             
-                for schedule in class_schedules:
-                    if schedule.get('day_of_week') == today_weekday:
-                        today_schedule = schedule
-                        break
+                # If check-in time is after the late threshold, mark as late
+                if check_in_time > config['late_time']:
+                    is_late = True
+                    late_minutes = int((check_in_time - config['class_start']).total_seconds() // 60)
+            else:
+                # Fall back to regular schedule check
+                class_schedules = self.db.get_class_schedules(class_id)
             
-                if today_schedule:
-                    # Check if student is late
-                    start_time_str = today_schedule.get('start_time')
-                    if start_time_str:
-                        # Parse schedule start time
-                        schedule_time = datetime.strptime(start_time_str, "%H:%M").time()
-                        class_start = datetime.combine(check_in_time.date(), schedule_time)
-                    
-                        # Calculate minutes late
-                        if check_in_time > class_start:
-                            time_diff = check_in_time - class_start
-                            late_minutes = time_diff.seconds // 60
-                            if late_minutes > 5:  # More than 5 minutes late is considered "Late"
-                                is_late = True
+                if class_schedules:
+                    # Find today's schedule
+                    today_weekday = check_in_time.strftime("%A")  # Monday, Tuesday, etc.
+                    today_schedule = None
+                
+                    for schedule in class_schedules:
+                        if schedule.get('day_of_week') == today_weekday:
+                            today_schedule = schedule
+                            break
+                
+                    if today_schedule:
+                        # Check if student is late
+                        start_time_str = today_schedule.get('start_time')
+                        if start_time_str:
+                            # Parse schedule start time
+                            try:
+                                schedule_time = datetime.strptime(start_time_str, "%H:%M").time()
+                                class_start = datetime.combine(check_in_time.date(), schedule_time)
                             
+                                # Calculate minutes late
+                                if check_in_time > class_start:
+                                    time_diff = check_in_time - class_start
+                                    late_minutes = time_diff.seconds // 60
+                                    if late_minutes > 5:  # More than 5 minutes late is considered "Late"
+                                        is_late = True
+                            except Exception as time_error:
+                                logging.error(f"Error parsing time: {time_error}")
+        
             # Determine attendance status
             status = "Late" if is_late else "Present"
         
@@ -671,6 +754,14 @@ class AttendanceTab(QWidget):
                     notes = f"Late by {late_minutes} minutes. Reason: {reason}" + (f" {notes}" if notes else "")
                 else:
                     notes = f"Late by {late_minutes} minutes." + (f" {notes}" if notes else "")
+        
+            # Add pre-check-in information to notes if active
+            if pre_checkin_active:
+                pre_checkin_note = "Pre-check-in mode active. "
+                if notes:
+                    notes = pre_checkin_note + notes
+                else:
+                    notes = pre_checkin_note
         
             # Mark attendance in database
             self.db.mark_attendance(
@@ -695,3 +786,272 @@ class AttendanceTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to process check-in: {str(e)}")
             logging.error(f"Attendance check-in error: {e}")
+            
+    def setup_pre_checkin(self):
+        """Set up pre-check-in time window for the selected class"""
+        try:
+            # Get the selected class
+            class_index = self.class_selector.currentIndex()
+            if class_index <= 0:  # 0 is the "Select Class" item
+                QMessageBox.warning(self, "No Class Selected", "Please select a class first")
+                return
+            
+            class_id = self.class_selector.itemData(class_index)
+            class_name = self.class_selector.currentText().split(' - ')[1] if ' - ' in self.class_selector.currentText() else ""
+        
+            # Create dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Set Pre-Check-In Time for {class_name}")
+            dialog.setMinimumWidth(400)
+        
+            # Dialog layout
+            layout = QVBoxLayout(dialog)
+        
+            # Class start time
+            form_layout = QFormLayout()
+        
+            # Get today's class schedule if it exists
+            from datetime import datetime
+            today_weekday = datetime.now().strftime("%A")
+            class_schedules = self.db.get_class_schedules(class_id)
+            today_schedule = None
+        
+            for schedule in class_schedules:
+                if schedule.get('day_of_week') == today_weekday:
+                    today_schedule = schedule
+                    break
+        
+            # Start time input
+            time_layout = QHBoxLayout()
+            hours_label = QLabel("Hours:")
+            self.hours_input = QSpinBox()
+            self.hours_input.setRange(0, 23)
+            self.hours_input.setValue(8)  # Default to 8:00 AM
+        
+            minutes_label = QLabel("Minutes:")
+            self.minutes_input = QSpinBox()
+            self.minutes_input.setRange(0, 59)
+            self.minutes_input.setValue(0)
+        
+            if today_schedule and today_schedule.get('start_time'):
+                try:
+                    # Parse start time from schedule
+                    start_time = datetime.strptime(today_schedule.get('start_time'), "%H:%M").time()
+                    self.hours_input.setValue(start_time.hour)
+                    self.minutes_input.setValue(start_time.minute)
+                except:
+                    logging.warning(f"Could not parse start time: {today_schedule.get('start_time')}")
+        
+            time_layout.addWidget(hours_label)
+            time_layout.addWidget(self.hours_input)
+            time_layout.addWidget(minutes_label)
+            time_layout.addWidget(self.minutes_input)
+        
+            form_layout.addRow("Class Start Time:", time_layout)
+        
+            # Pre-check-in window
+            self.pre_checkin_window = QSpinBox()
+            self.pre_checkin_window.setRange(1, 60)
+            self.pre_checkin_window.setValue(5)  # Default to 5 minutes
+            self.pre_checkin_window.setSuffix(" min")
+            form_layout.addRow("Pre-Check-In Window:", self.pre_checkin_window)
+        
+            # Late threshold
+            self.late_threshold = QSpinBox()
+            self.late_threshold.setRange(1, 60)
+            self.late_threshold.setValue(5)  # Default to 5 minutes
+            self.late_threshold.setSuffix(" min")
+            form_layout.addRow("Late Threshold After Start:", self.late_threshold)
+        
+            layout.addLayout(form_layout)
+        
+            # Current time info
+            current_time = QLabel(f"Current time: {datetime.now().strftime('%H:%M:%S')}")
+            current_time.setStyleSheet("color: #666;")
+            layout.addWidget(current_time)
+        
+            # Information text
+            info_text = QLabel("Setting pre-check-in time allows students to check in before class starts. "
+                              "Students arriving after class starts but within the late threshold will be marked as 'Present'. "
+                              "Students arriving after the late threshold will be marked as 'Late'.")
+            info_text.setWordWrap(True)
+            info_text.setStyleSheet("color: #666; font-style: italic;")
+            layout.addWidget(info_text)
+        
+            # Buttons
+            buttons_layout = QHBoxLayout()
+            start_btn = QPushButton("Start Pre-Check-In")
+            start_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+            cancel_btn = QPushButton("Cancel")
+            buttons_layout.addWidget(start_btn)
+            buttons_layout.addWidget(cancel_btn)
+            layout.addLayout(buttons_layout)
+        
+            # Connect buttons
+            start_btn.clicked.connect(lambda: self.start_pre_checkin(
+                class_id=class_id,
+                class_name=class_name,
+                hours=self.hours_input.value(),
+                minutes=self.minutes_input.value(),
+                pre_window=self.pre_checkin_window.value(),
+                late_threshold=self.late_threshold.value()
+            ))
+            start_btn.clicked.connect(dialog.accept)
+            cancel_btn.clicked.connect(dialog.reject)
+        
+            # Show dialog
+            dialog.exec()
+        
+        except Exception as e:
+            logging.error(f"Error setting up pre-check-in: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to set up pre-check-in: {str(e)}")
+            
+    def start_pre_checkin(self, class_id, class_name, hours, minutes, pre_window, late_threshold):
+        """Start pre-check-in mode with specified parameters"""
+        try:
+            from datetime import datetime, timedelta
+        
+            # Calculate relevant times
+            now = datetime.now()
+            class_start_time = datetime(
+                now.year, now.month, now.day,
+                hour=hours, minute=minutes
+            )
+            pre_checkin_start = class_start_time - timedelta(minutes=pre_window)
+            late_time = class_start_time + timedelta(minutes=late_threshold)
+        
+            # Store these values for use during check-in
+            self.pre_checkin_config = {
+                'class_id': class_id,
+                'class_name': class_name,
+                'class_start': class_start_time,
+                'pre_checkin_start': pre_checkin_start,
+                'late_time': late_time,
+                'pre_window': pre_window,
+                'late_threshold': late_threshold
+            }
+        
+            # Create status indicator
+            if not hasattr(self, 'pre_checkin_status'):
+                self.pre_checkin_status = QLabel()
+                self.layout().insertWidget(1, self.pre_checkin_status)
+        
+            # Update status
+            self.update_pre_checkin_status()
+        
+            # Start timer to update status
+            if not hasattr(self, 'pre_checkin_timer'):
+                self.pre_checkin_timer = QTimer(self)
+                self.pre_checkin_timer.timeout.connect(self.update_pre_checkin_status)
+        
+            self.pre_checkin_timer.start(1000)  # Update every second
+        
+            # Show confirmation
+            QMessageBox.information(self, "Pre-Check-In Started", 
+                                  f"Pre-check-in has started for {class_name}.\n\n"
+                                  f"Class starts at: {class_start_time.strftime('%H:%M')}\n"
+                                  f"Pre-check-in window: {pre_window} minutes before class\n"
+                                  f"Late threshold: {late_threshold} minutes after class starts")
+        
+        except Exception as e:
+            logging.error(f"Error starting pre-check-in: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to start pre-check-in: {str(e)}")
+            
+    def stop_pre_checkin(self):
+        """Stop the pre-check-in timer and clear status"""
+        try:
+            if hasattr(self, 'pre_checkin_timer') and self.pre_checkin_timer:
+                self.pre_checkin_timer.stop()
+            
+            if hasattr(self, 'pre_checkin_status'):
+                self.pre_checkin_status.setParent(None)
+                self.pre_checkin_status.deleteLater()
+                delattr(self, 'pre_checkin_status')
+            
+            if hasattr(self, 'pre_checkin_config'):
+                delattr(self, 'pre_checkin_config')
+             
+        except Exception as e:
+            logging.error(f"Error stopping pre-check-in: {e}")
+        
+    def update_pre_checkin_status(self):
+        """Update the pre-check-in status display"""
+        try:
+            if not hasattr(self, 'pre_checkin_config'):
+                return
+            
+            from datetime import datetime
+            now = datetime.now()
+            config = self.pre_checkin_config
+        
+            # Calculate time remaining or elapsed
+            if now < config['pre_checkin_start']:
+            # Before pre-check-in window
+                time_diff = config['pre_checkin_start'] - now
+                minutes = time_diff.seconds // 60
+                seconds = time_diff.seconds % 60
+                status_text = f"Pre-check-in starts in {minutes:02d}:{seconds:02d}"
+                status_color = "orange"
+            
+            elif now < config['class_start']:
+                # During pre-check-in window
+                time_diff = config['class_start'] - now
+                minutes = time_diff.seconds // 60
+                seconds = time_diff.seconds % 60
+                status_text = f"PRE-CHECK-IN ACTIVE - Class starts in {minutes:02d}:{seconds:02d}"
+                status_color = "green"
+            
+            elif now < config['late_time']:
+                # After class start but before late threshold
+                time_diff = config['late_time'] - now
+                minutes = time_diff.seconds // 60
+                seconds = time_diff.seconds % 60
+                status_text = f"Class has started - Late threshold in {minutes:02d}:{seconds:02d}"
+                status_color = "blue"
+            
+            else:
+                # After late threshold
+                time_diff = now - config['late_time']
+                minutes = time_diff.seconds // 60
+                status_text = f"Students are now LATE ({minutes} minutes after threshold)"
+                status_color = "red"
+        
+            # Update status display
+            self.pre_checkin_status.setText(status_text)
+            self.pre_checkin_status.setStyleSheet(
+                f"background-color: {status_color}; color: white; "
+                "padding: 10px; font-weight: bold; border-radius: 5px;"
+            )
+            self.pre_checkin_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        except Exception as e:
+            logging.error(f"Error updating pre-check-in status: {e}")
+            
+    def on_attendance_cell_changed(self, row, column):
+        """Handle edits to attendance table cells"""
+        try:
+            # Only process changes to the Notes column (index 5)
+            if column != 5:
+                return
+            
+            # Get the attendance record ID from the hidden data
+            attendance_id = self.attendance_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            if not attendance_id:
+                return
+            
+            # Get the new note text
+            notes_item = self.attendance_table.item(row, column)
+            if not notes_item:
+                return
+            
+            new_notes = notes_item.text()
+        
+            # Update the note in the database
+            self.db.update_attendance_note(attendance_id, new_notes)
+        
+            # Log the update
+            logging.info(f"Updated notes for attendance record {attendance_id}")
+        
+        except Exception as e:
+            logging.error(f"Error updating attendance note: {e}")
+            QMessageBox.warning(self, "Error", f"Could not update note: {str(e)}")
