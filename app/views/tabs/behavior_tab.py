@@ -266,3 +266,4 @@ class BehaviorTab(QWidget):
         """Handle tab closure, release camera resources."""
         self.stop_monitoring()
         event.accept()
+

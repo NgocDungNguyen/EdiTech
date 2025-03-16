@@ -23,40 +23,53 @@ from app.views.tabs.system_tab import SystemTab
 from app.models.database import Database
 from app.utils.config import BASE_DIR, ICONS_DIR, load_config
 
-# Configure logging
+# Configure logging with proper encoding handling
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('application.log', mode='w'),
-        logging.StreamHandler()
-    ]
+        logging.FileHandler("application.log", mode="w", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
 )
-
 class MainApplication(MainWindow):
     def __init__(self):
         try:
             super().__init__()
-            
+
             # Initialize database with detailed logging
             logging.info("Initializing database...")
             self.db = Database()
             logging.info("Creating database tables...")
             self.db.create_tables()
-            
-            # Debug and verify database
-            self.db.debug_student_table()
-            self.db.verify_database_schema()
-            
-            # Print detailed table schema for students and other key tables
-            self.db.print_table_schema('students')
-            self.db.print_table_schema('classes')
-            
+
+            # Debug and verify database - silent mode to avoid error dialogs
+            try:
+                self.db.debug_student_table()
+                self.db.verify_database_schema()
+
+                # Print detailed table schema for students and other key tables
+                self.db.print_table_schema("students")
+                self.db.print_table_schema("classes")
+
+                # Silent connection check - will never show error dialogs
+                connection_ok = self.db.check_database_connection()
+                if not connection_ok:
+                    logging.warning(
+                        "Database connection issues detected, but continuing..."
+                    )
+
+            except Exception as db_error:
+                # Just log database errors, don't show to user
+                logging.error(f"Database initialization issue: {db_error}")
+                logging.error(traceback.format_exc())
+                # Continue with application startup
+
             logging.info("Database initialization complete")
 
             # Load configuration
             config = load_config()
-            
+
             # Set application icon
             app_icon = QIcon(str(ICONS_DIR / "app_icon.png"))
             self.setWindowIcon(app_icon)
@@ -76,15 +89,15 @@ class MainApplication(MainWindow):
                 ("Analytics", AnalyticsTab()),
                 ("System", SystemTab())
             ]
-            
+
             # Add tabs to tab widget
             for title, tab in tabs:
                 self.tabs.addTab(tab, title)
-            
+
             # Set application-wide style
             app = QApplication.instance()
             app.setStyle('Fusion')
-            
+
             # Set application-wide stylesheet
             app.setStyleSheet("""
                 QWidget {
@@ -122,7 +135,7 @@ class MainApplication(MainWindow):
                     color: white;
                 }
             """)
-            
+
             self.setWindowTitle("Edison Vision - Class Management System")
             self.resize(1200, 800)
 
@@ -130,7 +143,7 @@ class MainApplication(MainWindow):
             # Comprehensive error handling
             logging.error(f"Initialization error: {e}")
             logging.error(traceback.format_exc())
-            
+
             # Show detailed error dialog
             error_dialog = QMessageBox()
             error_dialog.setIcon(QMessageBox.Icon.Critical)
@@ -138,8 +151,9 @@ class MainApplication(MainWindow):
             error_dialog.setText("Failed to start application")
             error_dialog.setDetailedText(str(traceback.format_exc()))
             error_dialog.exec()
-            
+
             raise
+
 
 def main():
     try:

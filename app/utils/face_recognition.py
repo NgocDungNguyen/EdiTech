@@ -25,30 +25,40 @@ class FaceRecognitionManager:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Fetch students with face encodings
             cursor.execute("""
                 SELECT student_id, face_encoding 
                 FROM students 
-                WHERE face_encoding IS NOT NULL
-            """)
-            
+                WHERE face_encoding IS NOT NULL AND length(face_encoding) > 0
+            """
+            )
+
             for student_id, encoded_face in cursor.fetchall():
                 try:
-                    # Decode base64 encoded face encoding
-                    face_encoding = np.frombuffer(
-                        base64.b64decode(encoded_face), 
-                        dtype=np.float64
-                    )
-                    
-                    self.known_face_encodings.append(face_encoding)
-                    self.known_student_ids.append(student_id)
+                    # Check if the encoding is non-empty
+                    if not encoded_face:
+                        continue
+                
+                    # Try to decode as a base64 string first
+                    try:
+                        face_encoding = np.frombuffer(
+                            base64.b64decode(encoded_face), 
+                            dtype=np.float64
+                        )
+                    except:
+                        # If base64 decoding fails, try direct binary
+                        face_encoding = np.frombuffer(encoded_face, dtype=np.float64)
+                
+                    if len(face_encoding) > 0:
+                        self.known_face_encodings.append(face_encoding)
+                        self.known_student_ids.append(student_id)
                 except Exception as decode_error:
                     logging.error(f"Error decoding face encoding for student {student_id}: {decode_error}")
-            
+        
             conn.close()
             logging.info(f"Loaded {len(self.known_student_ids)} known faces")
-        
+    
         except sqlite3.Error as e:
             logging.error(f"Database error loading faces: {e}")
         except Exception as e:
@@ -64,7 +74,7 @@ class FaceRecognitionManager:
         try:
             # Initialize webcam
             video_capture = cv2.VideoCapture(0)
-            
+
             # Check if webcam is opened successfully
             if not video_capture.isOpened():
                 logging.error("Could not open webcam")
@@ -95,7 +105,7 @@ class FaceRecognitionManager:
                     face_encoding, 
                     tolerance=0.6  # Adjust tolerance as needed
                 )
-                
+
                 # Find best match
                 face_distances = face_recognition.face_distance(
                     self.known_face_encodings, 
@@ -106,14 +116,14 @@ class FaceRecognitionManager:
                 if matches[best_match_index]:
                     student_id = self.known_student_ids[best_match_index]
                     confidence = 1 - face_distances[best_match_index]
-                    
+
                     # Record attendance
                     self.record_attendance(
                         student_id, 
                         class_id, 
                         confidence
                     )
-                    
+
                     results.append({
                         "student_id": student_id,
                         "confidence": float(confidence)
@@ -131,33 +141,40 @@ class FaceRecognitionManager:
     def record_attendance(self, student_id, class_id=None, confidence=None):
         """
         Record student attendance in the database
-        
+    
         :param student_id: ID of the recognized student
         :param class_id: Optional class ID
         :param confidence: Face match confidence
         """
         try:
+            # Use direct connection to database to ensure compatibility
+            from datetime import datetime
+            check_in_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             cursor.execute("""
                 INSERT INTO attendance 
-                (student_id, class_id, status, face_match_confidence) 
-                VALUES (?, ?, ?, ?)
+                (student_id, class_id, status, check_in_time, notes) 
+                VALUES (?, ?, ?, ?, ?)
             """, (
                 student_id, 
                 class_id or 'Unknown', 
                 'Present', 
-                confidence
+                check_in_time,
+                f"Face recognition confidence: {confidence:.2%}" if confidence else None
             ))
-            
+
             conn.commit()
             conn.close()
-            
+
             logging.info(f"Attendance recorded for student {student_id}")
-        
+            return True
+
         except sqlite3.Error as e:
             logging.error(f"Error recording attendance: {e}")
+            return False
 
     def add_student_face(self, student_id, face_image_path):
         """
@@ -170,39 +187,39 @@ class FaceRecognitionManager:
         try:
             # Load the image
             image = face_recognition.load_image_file(face_image_path)
-            
+
             # Find face encodings
             face_encodings = face_recognition.face_encodings(image)
-            
+
             if not face_encodings:
                 logging.error(f"No face found in image for student {student_id}")
                 return False
 
             # Take the first face encoding
             face_encoding = face_encodings[0]
-            
+
             # Convert to base64 for storage
             encoded_face = base64.b64encode(face_encoding.tobytes()).decode('utf-8')
-            
+
             # Update database
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             cursor.execute("""
                 UPDATE students 
                 SET face_encoding = ?, face_image_path = ? 
                 WHERE student_id = ?
             """, (encoded_face, face_image_path, student_id))
-            
+
             conn.commit()
             conn.close()
-            
+
             # Reload known faces
             self.load_known_faces()
-            
+
             logging.info(f"Face added for student {student_id}")
             return True
-        
+
         except Exception as e:
             logging.error(f"Error adding student face: {e}")
             return False
