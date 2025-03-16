@@ -4,7 +4,12 @@ import traceback
 import logging
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget, QMessageBox
+    QApplication,
+    QMainWindow,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+    QMessageBox,
 )
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt
@@ -32,6 +37,8 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
+
+
 class MainApplication(MainWindow):
     def __init__(self):
         try:
@@ -87,7 +94,7 @@ class MainApplication(MainWindow):
                 ("Behavior Monitor", BehaviorTab()),
                 ("Training", TrainingTab()),
                 ("Analytics", AnalyticsTab()),
-                ("System", SystemTab())
+                ("System", SystemTab()),
             ]
 
             # Add tabs to tab widget
@@ -96,10 +103,11 @@ class MainApplication(MainWindow):
 
             # Set application-wide style
             app = QApplication.instance()
-            app.setStyle('Fusion')
+            app.setStyle("Fusion")
 
             # Set application-wide stylesheet
-            app.setStyleSheet("""
+            app.setStyleSheet(
+                """
                 QWidget {
                     font-family: 'Arial', sans-serif;
                     font-size: 14px;
@@ -134,7 +142,8 @@ class MainApplication(MainWindow):
                     background: #1a73e8;
                     color: white;
                 }
-            """)
+            """
+            )
 
             self.setWindowTitle("Edison Vision - Class Management System")
             self.resize(1200, 800)
@@ -159,21 +168,25 @@ def main():
     try:
         logging.info("Starting Edison Vision application...")
         app = QApplication(sys.argv)
-        
+
         # Create and show main window
         window = MainApplication()
         window.show()
-        
+
         # Start application event loop
         sys.exit(app.exec())
-        
+
     except Exception as e:
         logging.error(f"Application Error: {str(e)}")
         logging.error(traceback.format_exc())
-        QMessageBox.critical(None, "Critical Error", 
+        QMessageBox.critical(
+            None,
+            "Critical Error",
             f"Unhandled application error: {str(e)}\n\n"
-            "Please check the log file for more details.")
+            "Please check the log file for more details.",
+        )
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

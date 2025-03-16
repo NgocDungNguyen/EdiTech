@@ -21,48 +21,38 @@ class Database:
     def __init__(self, db_path=None):
         """
         Initialize database connection with enhanced logging.
-    
+
         :param db_path: Optional custom path to SQLite database
         """
-        # Prevent re-initialization if already connected
-        if self.connection is not None:
+        # Skip if already initialized
+        if hasattr(self, 'connection') and self.connection is not None:
             return
 
         # Set default database path if not provided
         if db_path is None:
-            # Ensure data directory exists
-            data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
-            os.makedirs(data_dir, exist_ok=True)
-            db_path = os.path.join(data_dir, 'edison_vision.db')
+            db_path = str(DATABASE_PATH)
 
         # Log database path for debugging
         logging.info(f"Initializing database at path: {db_path}")
 
         try:
-            # Establish connection with additional error handling
+            # Create the directory if it doesn't exist
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            # Connect to the database with row factory for dict-like results
             self.connection = sqlite3.connect(db_path)
-            self.connection.row_factory = sqlite3.Row  # Use Row factory for more flexible access
-
-            # Log successful connection
-            logging.info("Database connection established successfully")
-
-            # Create cursor for initial operations
-            cursor = self.connection.cursor()
-
-            # Verify database integrity
-            cursor.execute("PRAGMA integrity_check")
-            integrity_result = cursor.fetchone()
-            logging.info(f"Database integrity check result: {integrity_result}")
-
-            # Create tables if not exists
-            self.create_tables()
-
-            # Run database migrations to add missing columns
+            self.connection.row_factory = sqlite3.Row
+            
+            # Enable foreign keys
+            self.connection.execute("PRAGMA foreign_keys = ON")
+            
+            # Run schema migration to ensure all columns exist
             self.migrate_schema()
-
+            
+            logging.info("Database connection established successfully")
         except sqlite3.Error as e:
-            # Comprehensive error logging
             logging.error(f"Database connection error: {e}")
+            raise
 
     def create_tables(self):
         """
@@ -125,7 +115,8 @@ class Database:
             )
 
             # class_schedules table
-            cursor.execute("""
+            cursor.execute(
+                """
             CREATE TABLE IF NOT EXISTS class_schedules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 class_id TEXT NOT NULL,
@@ -135,7 +126,8 @@ class Database:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (class_id) REFERENCES classes (class_id)
             )
-            """)
+            """
+            )
 
             # Attendance table
             cursor.execute(
@@ -172,19 +164,19 @@ class Database:
             """
             )
 
-            # Training Data table
-            cursor.execute(
-                """
+            # Training data table
+            cursor.execute("""
             CREATE TABLE IF NOT EXISTS training_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 behavior_type TEXT NOT NULL,
                 label TEXT NOT NULL,
                 image_path TEXT NOT NULL,
                 points TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT,
+                is_positive INTEGER DEFAULT 1
             )
-            """
-            )
+            """)
 
             # Commit transaction
             self.connection.commit()
@@ -259,12 +251,18 @@ class Database:
 
             # Check for required fields
             missing_fields = []
-            if not first_name: missing_fields.append("first_name")
-            if not last_name: missing_fields.append("last_name")
-            if not email: missing_fields.append("email")
-            if not phone: missing_fields.append("phone")
-            if not date_of_birth: missing_fields.append("date_of_birth")
-            if not gender: missing_fields.append("gender")
+            if not first_name:
+                missing_fields.append("first_name")
+            if not last_name:
+                missing_fields.append("last_name")
+            if not email:
+                missing_fields.append("email")
+            if not phone:
+                missing_fields.append("phone")
+            if not date_of_birth:
+                missing_fields.append("date_of_birth")
+            if not gender:
+                missing_fields.append("gender")
 
             if missing_fields:
                 missing_str = ", ".join(missing_fields)
@@ -279,28 +277,37 @@ class Database:
             face_image_path = student_data.get("face_image_path", "")
 
             # Get face encoding or set to empty bytes
-            face_encoding = student_data.get("face_encoding", b'')
+            face_encoding = student_data.get("face_encoding", b"")
 
             # Insert into database
             cursor = self.connection.cursor()
             cursor.execute(
                 """
                 INSERT INTO students (
-                    student_id, first_name, last_name, email, phone, 
+                    student_id, first_name, last_name, email, phone,
                     date_of_birth, gender, face_encoding, face_image_path,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
-                    student_id, first_name, last_name, email, phone,
-                    date_of_birth, gender, face_encoding, face_image_path
-                )
+                    student_id,
+                    first_name,
+                    last_name,
+                    email,
+                    phone,
+                    date_of_birth,
+                    gender,
+                    face_encoding,
+                    face_image_path,
+                ),
             )
 
             # Commit transaction
             self.connection.commit()
 
-            logging.info(f"Successfully added student {student_id}: {first_name} {last_name}")
+            logging.info(
+                f"Successfully added student {student_id}: {first_name} {last_name}"
+            )
             return student_id
 
         except sqlite3.Error as e:
@@ -315,7 +322,7 @@ class Database:
     def get_students(self, query=None, filters=None):
         """
         Retrieve students from the database with optional filtering.
-    
+
         :param query: Optional search query string
         :param filters: Optional dictionary of filter conditions
         :return: List of student dictionaries
@@ -327,18 +334,18 @@ class Database:
 
             # Base query with explicit column selection
             base_query = """
-                SELECT 
-                    student_id, 
-                    first_name, 
-                    last_name, 
-                    email, 
+                SELECT
+                    student_id,
+                    first_name,
+                    last_name,
+                    email,
                     phone,
                     date_of_birth,
                     gender,
                     face_encoding,
                     face_image_path,
-                    created_at, 
-                    updated_at 
+                    created_at,
+                    updated_at
                 FROM students
             """
 
@@ -347,7 +354,9 @@ class Database:
             params = []
 
             if query and isinstance(query, str):
-                where_conditions.append("(student_id LIKE ? OR first_name LIKE ? OR last_name LIKE ?)")
+                where_conditions.append(
+                    "(student_id LIKE ? OR first_name LIKE ? OR last_name LIKE ?)"
+                )
                 search_param = f"%{query}%"
                 params.extend([search_param, search_param, search_param])
 
@@ -382,7 +391,7 @@ class Database:
                 try:
                     # Always convert to dictionary regardless of row type
                     student = {}
-                
+
                     if isinstance(row, sqlite3.Row):
                         # Get column names from sqlite3.Row
                         for key in row.keys():
@@ -390,16 +399,16 @@ class Database:
                     else:
                         # For tuple results, map by position
                         student = {
-                            'student_id': row[0],
-                            'first_name': row[1],
-                            'last_name': row[2],
-                            'email': row[3],
-                            'phone': row[4],
-                            'date_of_birth': row[5] if len(row) > 5 else '',
-                            'gender': row[6] if len(row) > 6 else '',
-                            'face_image_path': row[8] if len(row) > 8 else ''
+                            "student_id": row[0],
+                            "first_name": row[1],
+                            "last_name": row[2],
+                            "email": row[3],
+                            "phone": row[4],
+                            "date_of_birth": row[5] if len(row) > 5 else "",
+                            "gender": row[6] if len(row) > 6 else "",
+                            "face_image_path": row[8] if len(row) > 8 else "",
                         }
-                
+
                     students.append(student)
                 except Exception as row_error:
                     logging.error(f"Error processing student row: {row_error}")
@@ -460,7 +469,7 @@ class Database:
             # Construct full query
             if updates:
                 query = f"""
-                    UPDATE students 
+                    UPDATE students
                     SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
                     WHERE student_id = ?
                 """
@@ -623,7 +632,7 @@ class Database:
             cursor.execute(
                 """
                 INSERT INTO classes (
-                    class_id, name, subject, teacher, 
+                    class_id, name, subject, teacher,
                     room, max_capacity, class_type, description,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -675,9 +684,9 @@ class Database:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT COUNT(*) as current_enrollment, max_capacity 
-                FROM class_enrollments 
-                JOIN classes ON class_enrollments.class_id = classes.class_id 
+                SELECT COUNT(*) as current_enrollment, max_capacity
+                FROM class_enrollments
+                JOIN classes ON class_enrollments.class_id = classes.class_id
                 WHERE classes.class_id = ?
             """,
                 (class_id,),
@@ -689,7 +698,7 @@ class Database:
 
             cursor.execute(
                 """
-                INSERT INTO class_enrollments (class_id, student_id, status) 
+                INSERT INTO class_enrollments (class_id, student_id, status)
                 VALUES (?, ?, ?)
             """,
                 (class_id, student_id, status),
@@ -718,18 +727,18 @@ class Database:
             # Fetch class details
             cursor.execute(
                 """
-                SELECT 
-                    class_id, 
-                    name, 
-                    subject, 
-                    teacher, 
-                    room, 
+                SELECT
+                    class_id,
+                    name,
+                    subject,
+                    teacher,
+                    room,
                     max_capacity,
                     class_type,
                     description
-                FROM 
-                    classes 
-                WHERE 
+                FROM
+                    classes
+                WHERE
                     class_id = ?
             """,
                 (class_id,),
@@ -745,13 +754,13 @@ class Database:
             # Fetch schedules for this class
             cursor.execute(
                 """
-                SELECT 
-                    days, 
-                    start_time, 
-                    end_time 
-                FROM 
-                    class_schedules 
-                WHERE 
+                SELECT
+                    days,
+                    start_time,
+                    end_time
+                FROM
+                    class_schedules
+                WHERE
                     class_id = ?
             """,
                 (class_id,),
@@ -804,14 +813,14 @@ class Database:
             # Update class information
             cursor.execute(
                 """
-                UPDATE classes 
-                SET 
-                    name = ?, 
-                    subject = ?, 
-                    teacher = ?, 
-                    room = ?, 
-                    max_capacity = ?, 
-                    class_type = ?, 
+                UPDATE classes
+                SET
+                    name = ?,
+                    subject = ?,
+                    teacher = ?,
+                    room = ?,
+                    max_capacity = ?,
+                    class_type = ?,
                     description = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE class_id = ?
@@ -871,12 +880,12 @@ class Database:
         """
         try:
             base_query = """
-                SELECT 
-                    c.class_id, 
-                    c.name, 
-                    c.subject, 
-                    c.teacher, 
-                    COUNT(ce.student_id) as current_enrollment 
+                SELECT
+                    c.class_id,
+                    c.name,
+                    c.subject,
+                    c.teacher,
+                    COUNT(ce.student_id) as current_enrollment
                 FROM classes c
                 LEFT JOIN class_enrollments ce ON c.class_id = ce.class_id
                 WHERE 1=1
@@ -987,10 +996,10 @@ class Database:
 
             cursor.execute(
                 """
-                SELECT 
-                    class_id, 
-                    name, 
-                    subject, 
+                SELECT
+                    class_id,
+                    name,
+                    subject,
                     teacher,
                     room,
                     class_type,
@@ -1010,7 +1019,9 @@ class Database:
 
             if len(classes) > 0:
                 # Log sample class data
-                logging.info(f"Sample class ID: {classes[0]['class_id']}, Name: {classes[0]['name']}")
+                logging.info(
+                    f"Sample class ID: {classes[0]['class_id']}, Name: {classes[0]['name']}"
+                )
 
             return classes
         except sqlite3.Error as e:
@@ -1021,7 +1032,7 @@ class Database:
     def get_attendance_records(self, class_id, date=None):
         """
         Get attendance records for a specific class and date.
-    
+
         :param class_id: ID of the class
         :param date: Date string in format 'YYYY-MM-DD'
         :return: List of attendance records
@@ -1030,12 +1041,12 @@ class Database:
             cursor = self.connection.cursor()
 
             query = """
-                SELECT 
-                    a.id, 
-                    a.student_id, 
+                SELECT
+                    a.id,
+                    a.student_id,
                     s.first_name || ' ' || s.last_name as name,
-                    a.check_in_time, 
-                    a.status, 
+                    a.check_in_time,
+                    a.status,
                     a.notes
                 FROM attendance a
                 JOIN students s ON a.student_id = s.student_id
@@ -1055,13 +1066,13 @@ class Database:
             records = []
             for row in cursor.fetchall():
                 record = {
-                    'id': row[0],
-                    'student_id': row[1], 
-                    'name': row[2],
-                    'check_in_time': row[3],
-                    'status': row[4],
-                    'notes': row[5],
-                    'location': ''  # Added for compatibility with UI
+                    "id": row[0],
+                    "student_id": row[1],
+                    "name": row[2],
+                    "check_in_time": row[3],
+                    "status": row[4],
+                    "notes": row[5],
+                    "location": "",  # Added for compatibility with UI
                 }
                 records.append(record)
 
@@ -1072,10 +1083,12 @@ class Database:
             return []
 
     # Attendance operations
-    def mark_attendance(self, student_id, class_id, status="Present", check_in_time=None, notes=None):
+    def mark_attendance(
+        self, student_id, class_id, status="Present", check_in_time=None, notes=None
+    ):
         """
         Mark student attendance
-    
+
         :param student_id: Student ID
         :param class_id: Class ID
         :param status: Attendance status (Present, Absent, Late, etc.)
@@ -1089,6 +1102,7 @@ class Database:
             # Set default check-in time to now if not provided
             if not check_in_time:
                 from datetime import datetime
+
                 check_in_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # Insert attendance record
@@ -1098,15 +1112,17 @@ class Database:
                 (student_id, class_id, status, check_in_time, notes)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (student_id, class_id, status, check_in_time, notes)
-            ) 
+                (student_id, class_id, status, check_in_time, notes),
+            )
 
             # Get the ID of the inserted record
             cursor.execute("SELECT last_insert_rowid()")
             attendance_id = cursor.fetchone()[0]
 
             self.connection.commit()
-            logging.info(f"Marked attendance for student {student_id} in class {class_id}")
+            logging.info(
+                f"Marked attendance for student {student_id} in class {class_id}"
+            )
 
             return attendance_id
 
@@ -1120,7 +1136,7 @@ class Database:
         if class_id:
             cursor = self.execute(
                 """
-                SELECT * FROM attendance 
+                SELECT * FROM attendance
                 WHERE student_id = ? AND class_id = ?
                 ORDER BY check_in_time DESC
             """,
@@ -1129,28 +1145,27 @@ class Database:
         else:
             cursor = self.execute(
                 """
-                SELECT * FROM attendance 
+                SELECT * FROM attendance
                 WHERE student_id = ?
                 ORDER BY check_in_time DESC
             """,
                 (student_id,),
             )
         return cursor.fetchall()
-    
-    
+
     def get_class_schedules(self, class_id):
         """
         Get schedules for a specific class
-    
+
         :param class_id: ID of the class
         :return: List of schedule dictionaries
         """
         try:
             cursor = self.connection.cursor()
-        
+
             cursor.execute(
                 """
-                SELECT 
+                SELECT
                     id,
                     class_id,
                     days AS day_of_week,
@@ -1161,8 +1176,8 @@ class Database:
                     updated_at
                 FROM class_schedules
                 WHERE class_id = ?
-                ORDER BY 
-                    CASE 
+                ORDER BY
+                    CASE
                         WHEN day_of_week = 'Monday' THEN 1
                         WHEN day_of_week = 'Tuesday' THEN 2
                         WHEN day_of_week = 'Wednesday' THEN 3
@@ -1173,9 +1188,9 @@ class Database:
                     END,
                     start_time
                 """,
-                (class_id,)
+                (class_id,),
             )
-        
+
             schedules = []
             for row in cursor.fetchall():
                 if isinstance(row, sqlite3.Row):
@@ -1184,44 +1199,44 @@ class Database:
                         schedule[key] = row[key]
                 else:
                     schedule = {
-                        'id': row[0],
-                        'class_id': row[1],
-                        'day_of_week': row[2],
-                        'start_time': row[3],
-                        'end_time': row[4],
-                        'room': row[5]
+                        "id": row[0],
+                        "class_id": row[1],
+                        "day_of_week": row[2],
+                        "start_time": row[3],
+                        "end_time": row[4],
+                        "room": row[5],
                     }
                 schedules.append(schedule)
-            
+
             return schedules
-        
+
         except sqlite3.Error as e:
             logging.error(f"Error getting class schedules: {e}")
             return []
-        
+
     def update_attendance_note(self, attendance_id, notes):
         """
         Update the notes for an attendance record
-    
+
         :param attendance_id: ID of the attendance record
         :param notes: New notes text
         :return: True if successful, False otherwise
         """
         try:
             cursor = self.connection.cursor()
-         
+
             cursor.execute(
                 """
                 UPDATE attendance
                 SET notes = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (notes, attendance_id)
+                (notes, attendance_id),
             )
-        
+
             self.connection.commit()
             return True
-        
+
         except sqlite3.Error as e:
             self.connection.rollback()
             logging.error(f"Error updating attendance note: {e}")
@@ -1449,24 +1464,48 @@ class Database:
     def migrate_schema(self):
         """Migrate database schema to latest version"""
         try:
+            logging.info("Starting database schema migration...")
             cursor = self.connection.cursor()
+            
+            # Check training_data table schema
+            cursor.execute("PRAGMA table_info(training_data)")
+            training_columns = {column[1]: column for column in cursor.fetchall()}
+            
+            # Add missing columns to training_data table
+            if 'notes' not in training_columns:
+                logging.info("Adding 'notes' column to training_data table")
+                cursor.execute("ALTER TABLE training_data ADD COLUMN notes TEXT")
+                
+            if 'is_positive' not in training_columns:
+                logging.info("Adding 'is_positive' column to training_data table")
+                cursor.execute("ALTER TABLE training_data ADD COLUMN is_positive INTEGER DEFAULT 1")
+                
+            # Add annotation_type column if it doesn't exist
+            if 'annotation_type' not in training_columns:
+                logging.info("Adding 'annotation_type' column to training_data table")
+                cursor.execute("ALTER TABLE training_data ADD COLUMN annotation_type TEXT DEFAULT 'keypoints'")
 
-            # Check if students table has NOT NULL constraints on face fields
+            # Add annotation_data column if it doesn't exist
+            if 'annotation_data' not in training_columns:
+                logging.info("Adding 'annotation_data' column to training_data table")
+                cursor.execute("ALTER TABLE training_data ADD COLUMN annotation_data TEXT")
+            
+            # Check students table for missing columns and constraints
             cursor.execute("PRAGMA table_info(students)")
-            columns = {column[1]: column for column in cursor.fetchall()}
-
-            # If face_encoding or face_image_path have NOT NULL constraint
+            student_columns = {column[1]: column for column in cursor.fetchall()}
+            
+            # Check if students table has NOT NULL constraints on face fields
             needs_relaxed_constraints = False
             face_fields_missing = False
 
-            if 'face_encoding' not in columns:
+            if "face_encoding" not in student_columns:
                 face_fields_missing = True
-            elif columns['face_encoding'][3] == 1:  # 1 means NOT NULL
+            elif student_columns["face_encoding"][3] == 1:  # 1 means NOT NULL
                 needs_relaxed_constraints = True
 
-            if 'face_image_path' not in columns:
+            if "face_image_path" not in student_columns:
                 face_fields_missing = True
-            elif columns['face_image_path'][3] == 1:
+            elif student_columns["face_image_path"][3] == 1:
                 needs_relaxed_constraints = True
 
             # If we need to relax constraints, we need to recreate the table
@@ -1475,27 +1514,27 @@ class Database:
 
                 # Create a new table without the constraints
                 cursor.execute("""
-                CREATE TABLE IF NOT EXISTS students_new (
-                    student_id TEXT PRIMARY KEY,
-                    first_name TEXT,
-                    last_name TEXT,
-                    email TEXT NOT NULL,
-                    phone TEXT NOT NULL,
-                    date_of_birth DATE NOT NULL,
-                    gender TEXT NOT NULL,
-                    face_encoding BLOB,
-                    face_image_path TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
+                    CREATE TABLE IF NOT EXISTS students_new (
+                        student_id TEXT PRIMARY KEY,
+                        first_name TEXT,
+                        last_name TEXT,
+                        email TEXT NOT NULL,
+                        phone TEXT NOT NULL,
+                        date_of_birth DATE NOT NULL,
+                        gender TEXT NOT NULL,
+                        face_encoding BLOB,
+                        face_image_path TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
                 """)
 
                 # Copy data from old to new table
                 cursor.execute("""
-                INSERT INTO students_new 
-                SELECT student_id, first_name, last_name, email, phone, date_of_birth, gender, 
-                       IFNULL(face_encoding, ''), IFNULL(face_image_path, ''), created_at, updated_at 
-                FROM students
+                    INSERT INTO students_new
+                    SELECT student_id, first_name, last_name, email, phone, date_of_birth, gender,
+                        IFNULL(face_encoding, ''), IFNULL(face_image_path, ''), created_at, updated_at
+                    FROM students
                 """)
 
                 # Drop old table and rename new one
@@ -1505,14 +1544,14 @@ class Database:
                 logging.info("Successfully migrated students table to remove NOT NULL constraints")
             elif face_fields_missing:
                 # Add missing columns to students table if needed
-                if 'face_encoding' not in columns:
+                if "face_encoding" not in student_columns:
                     try:
                         cursor.execute("ALTER TABLE students ADD COLUMN face_encoding BLOB")
                         logging.info("Added missing column 'face_encoding' to students table")
                     except sqlite3.Error as column_error:
                         logging.warning(f"Could not add column 'face_encoding': {column_error}")
 
-                if 'face_image_path' not in columns:
+                if "face_image_path" not in student_columns:
                     try:
                         cursor.execute("ALTER TABLE students ADD COLUMN face_image_path TEXT")
                         logging.info("Added missing column 'face_image_path' to students table")
@@ -1521,85 +1560,112 @@ class Database:
 
             # Check table structure for classes table
             cursor.execute("PRAGMA table_info(classes)")
-            columns = {column[1]: column for column in cursor.fetchall()}
+            class_columns = {column[1]: column for column in cursor.fetchall()}
 
             # Add missing columns to classes table if needed
-            missing_columns = []
-            if 'subject' not in columns:
-                missing_columns.append(("subject", "TEXT NOT NULL DEFAULT ''"))
-            if 'teacher' not in columns:
-                missing_columns.append(("teacher", "TEXT NOT NULL DEFAULT ''"))
-            if 'class_type' not in columns:
-                missing_columns.append(("class_type", "TEXT"))
-            if 'max_capacity' not in columns:
-                missing_columns.append(("max_capacity", "INTEGER DEFAULT 30"))
-
-            # Apply class table migrations if needed
-            for column_name, column_type in missing_columns:
+            if "subject" not in class_columns:
                 try:
-                    cursor.execute(f"ALTER TABLE classes ADD COLUMN {column_name} {column_type}")
-                    logging.info(f"Added missing column '{column_name}' to classes table")
-                except sqlite3.Error as column_error:
-                    logging.warning(f"Could not add column '{column_name}': {column_error}")
-
-            # Check table structure for class_schedules table
-            cursor.execute("PRAGMA table_info(class_schedules)")
-            columns = {column[1]: column for column in cursor.fetchall()}
-        
-            # Add day_of_week column to class_schedules if it doesn't exist
-            if 'day_of_week' not in columns:
-                cursor.execute("ALTER TABLE class_schedules ADD COLUMN day_of_week TEXT")
-                # Copy data from days to day_of_week if days exists
-                if 'days' in columns:
-                    cursor.execute("UPDATE class_schedules SET day_of_week = days")
-                    logging.info("Added day_of_week column to class_schedules table")
-            
-            # Add room column to class_schedules if it doesn't exist
-            if 'room' not in columns:
-                cursor.execute("ALTER TABLE class_schedules ADD COLUMN room TEXT")
-                logging.info("Added room column to class_schedules table")
-            
-            # Add updated_at column to class_schedules if it doesn't exist
-            if 'updated_at' not in columns:
-                cursor.execute("ALTER TABLE class_schedules ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
-                logging.info("Added updated_at column to class_schedules table")
-
-            # Ensure default profile image exists
-            default_profile_path = os.path.join(DATA_DIR, 'default_profile.png')
-            if not os.path.exists(default_profile_path):
+                    cursor.execute("ALTER TABLE classes ADD COLUMN subject TEXT DEFAULT ''")
+                    logging.info("Added 'subject' column to classes table")
+                except sqlite3.Error as e:
+                    logging.warning(f"Could not add column 'subject': {e}")
+                    
+            if "teacher" not in class_columns:
                 try:
-                    # Create student_captures directory
-                    student_captures_dir = os.path.join(DATA_DIR, 'student_captures')
-                    os.makedirs(student_captures_dir, exist_ok=True)
-
-                    # Generate a simple default profile image if PIL is available
+                    cursor.execute("ALTER TABLE classes ADD COLUMN teacher TEXT DEFAULT ''")
+                    logging.info("Added 'teacher' column to classes table")
+                except sqlite3.Error as e:
+                    logging.warning(f"Could not add column 'teacher': {e}")
+                    
+            if "class_type" not in class_columns:
+                try:
+                    cursor.execute("ALTER TABLE classes ADD COLUMN class_type TEXT")
+                    logging.info("Added 'class_type' column to classes table")
+                except sqlite3.Error as e:
+                    logging.warning(f"Could not add column 'class_type': {e}")
+                    
+            if "max_capacity" not in class_columns:
+                try:
+                    cursor.execute("ALTER TABLE classes ADD COLUMN max_capacity INTEGER DEFAULT 30")
+                    logging.info("Added 'max_capacity' column to classes table")
+                except sqlite3.Error as e:
+                    logging.warning(f"Could not add column 'max_capacity': {e}")
+            
+            # Check class enrollments table structure
+            cursor.execute("PRAGMA table_info(class_enrollments)")
+            enrollment_columns = {column[1]: column for column in cursor.fetchall()}
+            
+            if "enroll_date" not in enrollment_columns:
+                try:
+                    cursor.execute("ALTER TABLE class_enrollments ADD COLUMN enroll_date DATETIME DEFAULT CURRENT_TIMESTAMP")
+                    logging.info("Added 'enroll_date' column to class_enrollments table")
+                except sqlite3.Error as e:
+                    logging.warning(f"Could not add column 'enroll_date': {e}")
+            
+            # Check class_schedules table structure
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='class_schedules'")
+            if not cursor.fetchone():
+                # Create the class_schedules table if it doesn't exist
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS class_schedules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        class_id TEXT NOT NULL,
+                        days TEXT NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT NOT NULL,
+                        room TEXT,
+                        day_of_week TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (class_id) REFERENCES classes (class_id)
+                    )
+                """)
+                logging.info("Created class_schedules table")
+            else:
+                # Check for missing columns
+                cursor.execute("PRAGMA table_info(class_schedules)")
+                schedule_columns = {column[1]: column for column in cursor.fetchall()}
+                
+                if "day_of_week" not in schedule_columns:
                     try:
-                        from PIL import Image, ImageDraw
-
-                        # Create a 100x100 white image with a gray silhouette
-                        img = Image.new('RGB', (100, 100), color=(240, 240, 240))
-                        d = ImageDraw.Draw(img)
-
-                        # Draw a simple silhouette
-                        d.ellipse((25, 10, 75, 60), fill=(200, 200, 200))  # Head
-                        d.rectangle((35, 60, 65, 90), fill=(200, 200, 200))  # Body
-
-                        # Save the image
-                        img.save(default_profile_path)
-                        logging.info(f"Created default profile image at {default_profile_path}")
-                    except ImportError:
-                        logging.warning("PIL not available, can't create default profile image")
-                        # Create an empty file as fallback
-                        with open(default_profile_path, 'wb') as f:
-                            f.write(b'')
-                except Exception as e:
-                    logging.warning(f"Could not create default profile image: {e}")
-
-            # Commit changes
+                        cursor.execute("ALTER TABLE class_schedules ADD COLUMN day_of_week TEXT")
+                        # Copy data from days to day_of_week if days exists
+                        if "days" in schedule_columns:
+                            cursor.execute("UPDATE class_schedules SET day_of_week = days")
+                        logging.info("Added 'day_of_week' column to class_schedules table")
+                    except sqlite3.Error as e:
+                        logging.warning(f"Could not add column 'day_of_week': {e}")
+                        
+                if "room" not in schedule_columns:
+                    try:
+                        cursor.execute("ALTER TABLE class_schedules ADD COLUMN room TEXT")
+                        logging.info("Added 'room' column to class_schedules table")
+                    except sqlite3.Error as e:
+                        logging.warning(f"Could not add column 'room': {e}")
+                        
+                if "updated_at" not in schedule_columns:
+                    try:
+                        cursor.execute("ALTER TABLE class_schedules ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+                        logging.info("Added 'updated_at' column to class_schedules table")
+                    except sqlite3.Error as e:
+                        logging.warning(f"Could not add column 'updated_at': {e}")
+            
+            # Create training_images directory if it doesn't exist
+            training_dir = os.path.join(DATA_DIR, "training_images")
+            if not os.path.exists(training_dir):
+                os.makedirs(training_dir, exist_ok=True)
+                logging.info(f"Created training images directory at {training_dir}")
+                
+            # Create camera_captures directory if it doesn't exist
+            captures_dir = os.path.join(DATA_DIR, "camera_captures")
+            if not os.path.exists(captures_dir):
+                os.makedirs(captures_dir, exist_ok=True)
+                logging.info(f"Created camera captures directory at {captures_dir}")
+            
+            # Commit all changes
             self.connection.commit()
-
             logging.info("Database schema migration completed successfully")
-
+            
         except sqlite3.Error as e:
             logging.error(f"Database migration error: {e}")
             self.connection.rollback()

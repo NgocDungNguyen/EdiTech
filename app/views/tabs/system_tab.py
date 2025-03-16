@@ -1,6 +1,14 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                               QPushButton, QFileDialog, QFrame, QMessageBox,
-                               QProgressBar)
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QFileDialog,
+    QFrame,
+    QMessageBox,
+    QProgressBar,
+)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 import shutil
@@ -12,8 +20,10 @@ import json
 from app.models.database import Database
 from app.utils.config import DATA_DIR, BACKUPS_DIR
 
+
 class BackupWorker(QThread):
     """Worker thread for handling backup operations."""
+
     progress = pyqtSignal(int)
     finished = pyqtSignal(bool, str)
 
@@ -54,22 +64,24 @@ class BackupWorker(QThread):
     def backup_database(self, backup_dir):
         """Export database data to JSON files."""
         cursor = self.db.connection.cursor()
-        
+
         # Get all tables
-        cursor.execute("""
-            SELECT table_name 
+        cursor.execute(
+            """
+            SELECT table_name
             FROM information_schema.tables
             WHERE table_schema = DATABASE()
-        """)
+        """
+        )
         tables = cursor.fetchall()
 
         # Export each table
         for table in tables:
-            table_name = table['table_name']
+            table_name = table["table_name"]
             cursor.execute(f"SELECT * FROM {table_name}")
             rows = cursor.fetchall()
-            
-            with open(backup_dir / f"{table_name}.json", 'w') as f:
+
+            with open(backup_dir / f"{table_name}.json", "w") as f:
                 json.dump(rows, f, default=str, indent=4)
 
     def backup_training_data(self, backup_dir):
@@ -77,9 +89,7 @@ class BackupWorker(QThread):
         training_dir = DATA_DIR / "training_images"
         if training_dir.exists():
             shutil.copytree(
-                training_dir,
-                backup_dir / "training_images",
-                dirs_exist_ok=True
+                training_dir, backup_dir / "training_images", dirs_exist_ok=True
             )
 
     def backup_config(self, backup_dir):
@@ -91,17 +101,14 @@ class BackupWorker(QThread):
     def create_backup_info(self, backup_dir):
         """Create a backup information file."""
         info = {
-            'timestamp': datetime.now().isoformat(),
-            'version': '1.0',
-            'contents': {
-                'database': True,
-                'training_data': True,
-                'config': True
-            }
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.0",
+            "contents": {"database": True, "training_data": True, "config": True},
         }
-        
-        with open(backup_dir / "backup_info.json", 'w') as f:
+
+        with open(backup_dir / "backup_info.json", "w") as f:
             json.dump(info, f, indent=4)
+
 
 class SystemTab(QWidget):
     def __init__(self):
@@ -127,15 +134,15 @@ class SystemTab(QWidget):
 
         # Backup Controls
         backup_controls = QHBoxLayout()
-        
+
         self.backup_btn = QPushButton("Create Backup")
         self.backup_btn.clicked.connect(self.create_backup)
         backup_controls.addWidget(self.backup_btn)
-        
+
         self.restore_btn = QPushButton("Restore Backup")
         self.restore_btn.clicked.connect(self.restore_backup)
         backup_controls.addWidget(self.restore_btn)
-        
+
         backup_layout.addLayout(backup_controls)
 
         # Progress Bar
@@ -170,7 +177,8 @@ class SystemTab(QWidget):
         layout.addStretch()
 
         # Styling
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QFrame {
                 background-color: white;
                 border-radius: 10px;
@@ -202,7 +210,8 @@ class SystemTab(QWidget):
             QProgressBar::chunk {
                 background-color: #1a73e8;
             }
-        """)
+        """
+        )
 
     def create_backup(self):
         """Create a backup of the system data."""
@@ -234,9 +243,7 @@ class SystemTab(QWidget):
         try:
             # Let user select backup directory
             backup_dir = QFileDialog.getExistingDirectory(
-                self,
-                "Select Backup Directory",
-                str(BACKUPS_DIR)
+                self, "Select Backup Directory", str(BACKUPS_DIR)
             )
 
             if not backup_dir:
@@ -252,26 +259,26 @@ class SystemTab(QWidget):
                 self,
                 "Confirm Restore",
                 "This will overwrite current data with backup data. Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
 
             if reply == QMessageBox.StandardButton.Yes:
                 # Perform restoration
                 self.status_label.setText("Restoring backup...")
-                
+
                 # 1. Restore database
                 self.restore_database(backup_dir)
-                
+
                 # 2. Restore training data
                 self.restore_training_data(backup_dir)
-                
+
                 # 3. Restore configuration
                 self.restore_config(backup_dir)
 
                 QMessageBox.information(
                     self,
                     "Success",
-                    "Backup restored successfully! Please restart the application."
+                    "Backup restored successfully! Please restart the application.",
                 )
 
         except Exception as e:
@@ -343,14 +350,15 @@ class SystemTab(QWidget):
             self,
             "Confirm Exit",
             "Are you sure you want to exit the application?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             # Close database connection
             db = Database()
             db.close()
-            
+
             # Exit application
             import sys
+
             sys.exit(0)

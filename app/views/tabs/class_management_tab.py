@@ -4,16 +4,29 @@ import json
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QDateEdit, QMessageBox, QFrame, QFormLayout, 
-    QTableWidget, QTableWidgetItem, QTabWidget, QScrollArea, 
-    QGridLayout, QComboBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QDateEdit,
+    QMessageBox,
+    QFrame,
+    QFormLayout,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QScrollArea,
+    QGridLayout,
+    QComboBox,
 )
 from PyQt6.QtCore import Qt, QDate, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QFont, QIcon
 
 from app.models.database import Database
 from app.utils.config import DATA_DIR, ICONS_DIR
+
 
 class ClassManagementTab(QWidget):
     def __init__(self):
@@ -29,11 +42,11 @@ class ClassManagementTab(QWidget):
 
         # Create tab widget for class registration and class list
         tab_widget = QTabWidget()
-        
+
         # Class Registration Tab
         class_registration_tab = QWidget()
         registration_layout = QVBoxLayout(class_registration_tab)
-        
+
         # Registration Form Frame
         form_frame = QFrame()
         form_layout = QFormLayout(form_frame)
@@ -67,21 +80,28 @@ class ClassManagementTab(QWidget):
 
         # Class Type Dropdown
         self.class_type_combo = QComboBox()
-        self.class_type_combo.addItems([
-            "Select Class Type", "Lecture", "Lab", 
-            "Seminar", "Workshop", "Online", "Hybrid"
-        ])
+        self.class_type_combo.addItems(
+            [
+                "Select Class Type",
+                "Lecture",
+                "Lab",
+                "Seminar",
+                "Workshop",
+                "Online",
+                "Hybrid",
+            ]
+        )
         form_layout.addRow("Class Type:", self.class_type_combo)
 
         # Buttons Layout
         button_layout = QHBoxLayout()
-        
+
         # Save Button
         save_btn = QPushButton("Save Class")
         save_btn.setIcon(QIcon(str(ICONS_DIR / "save.png")))
         save_btn.clicked.connect(self.save_class)
         button_layout.addWidget(save_btn)
-        
+
         # Clear Button
         clear_btn = QPushButton("Clear")
         clear_btn.setIcon(QIcon(str(ICONS_DIR / "clear.png")))
@@ -94,20 +114,20 @@ class ClassManagementTab(QWidget):
         # Class List Tab
         class_list_tab = QWidget()
         list_layout = QVBoxLayout(class_list_tab)
-        
+
         # Table for class list
         self.class_table = QTableWidget()
         self.class_table.setColumnCount(5)
-        self.class_table.setHorizontalHeaderLabels([
-            "Class ID", "Name", "Subject", "Teacher", "Actions"
-        ])
+        self.class_table.setHorizontalHeaderLabels(
+            ["Class ID", "Name", "Subject", "Teacher", "Actions"]
+        )
         self.class_table.horizontalHeader().setStretchLastSection(True)
-        
+
         # Refresh button for class list
         refresh_btn = QPushButton("Refresh Class List")
         refresh_btn.setIcon(QIcon(str(ICONS_DIR / "refresh.png")))
         refresh_btn.clicked.connect(self.load_classes)
-        
+
         list_layout.addWidget(refresh_btn)
         list_layout.addWidget(self.class_table)
 
@@ -131,24 +151,28 @@ class ClassManagementTab(QWidget):
         class_type = self.class_type_combo.currentText()
 
         if not class_id or not name or not subject or not teacher:
-            QMessageBox.warning(self, "Validation Error", "Class ID, Name, Subject, and Teacher are required.")
+            QMessageBox.warning(
+                self,
+                "Validation Error",
+                "Class ID, Name, Subject, and Teacher are required.",
+            )
             return
 
         try:
             # Save to database
             self.db.add_class(
-                class_id=class_id, 
-                name=name, 
-                subject=subject, 
-                teacher=teacher, 
+                class_id=class_id,
+                name=name,
+                subject=subject,
+                teacher=teacher,
                 room=room,
-                class_type=class_type
+                class_type=class_type,
             )
 
             QMessageBox.information(self, "Success", "Class added successfully!")
             self.clear_form()
             self.load_classes()
-        
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save class: {str(e)}")
 
@@ -166,44 +190,54 @@ class ClassManagementTab(QWidget):
         try:
             # Clear existing rows
             self.class_table.setRowCount(0)
-            
+
             # Execute query to get all classes
             cursor = self.db.connection.cursor()
-            cursor.execute("SELECT class_id, name, subject, teacher FROM classes ORDER BY name")
+            cursor.execute(
+                "SELECT class_id, name, subject, teacher FROM classes ORDER BY name"
+            )
             classes = cursor.fetchall()
-            
+
             # Set row count
             self.class_table.setRowCount(len(classes))
-            
+
             # Populate table
             for row, class_data in enumerate(classes):
                 # Class ID
                 id_item = QTableWidgetItem(str(class_data[0]))
                 id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.class_table.setItem(row, 0, id_item)
-                
+
                 # Name
                 name_item = QTableWidgetItem(str(class_data[1]))
                 name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.class_table.setItem(row, 1, name_item)
-                
+
                 # Subject
                 subject_item = QTableWidgetItem(str(class_data[2]))
-                subject_item.setFlags(subject_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                subject_item.setFlags(
+                    subject_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                )
                 self.class_table.setItem(row, 2, subject_item)
-                
+
                 # Teacher
                 teacher_item = QTableWidgetItem(str(class_data[3]))
-                teacher_item.setFlags(teacher_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                teacher_item.setFlags(
+                    teacher_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                )
                 self.class_table.setItem(row, 3, teacher_item)
-                
+
                 # Actions (placeholder for future functionality)
                 actions_item = QTableWidgetItem("View | Edit | Delete")
-                actions_item.setFlags(actions_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                actions_item.setFlags(
+                    actions_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                )
                 self.class_table.setItem(row, 4, actions_item)
-            
+
             # Resize columns to content
             self.class_table.resizeColumnsToContents()
-        
+
         except Exception as e:
-            QMessageBox.critical(self, "Database Error", f"Could not load classes: {str(e)}")
+            QMessageBox.critical(
+                self, "Database Error", f"Could not load classes: {str(e)}"
+            )
