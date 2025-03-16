@@ -1,0 +1,22 @@
+{
+    "database": {
+        "path": "C:\\Users\\LucyS\\CascadeProjects\\edison_vision\\data\\edison_vision.db"
+    },
+    "camera": {
+        "device_id": 0,
+        "frame_width": 640,
+        "frame_height": 480,
+        "fps": 30
+    },
+    "face_recognition": {
+        "tolerance": 0.6,
+        "model": "hog"
+    },
+    "attendance": {
+        "default_checkin_window": 5
+    },
+    "backup": {
+        "auto_backup": true,
+        "backup_interval": 24
+    }
+}
