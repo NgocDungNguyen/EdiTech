@@ -1,19 +1,32 @@
 import os
 import cv2
-import datetime
+import logging
+import sqlite3
+from datetime import datetime
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
-    QTableWidgetItem, QPushButton, QComboBox, QDateEdit, 
-    QMessageBox, QGroupBox, QGridLayout, QLineEdit, QDialog
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QPushButton,
+    QComboBox,
+    QDateEdit,
+    QMessageBox,
+    QGroupBox,
+    QGridLayout,
+    QLineEdit,
+    QDialog,
+    QInputDialog,
 )
-from PyQt6.QtGui import QFont, QColor, QIcon
+from PyQt6.QtGui import QFont, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtCore import Qt, QDate, QTimer
 
 from app.models.database import Database
 from app.utils.face_recognition import FaceRecognitionManager
 from app.utils.config import DATA_DIR, ICONS_DIR
-import logging
-import sqlite3
+
 
 class AttendanceTab(QWidget):
     def __init__(self, parent=None):
@@ -248,114 +261,173 @@ class AttendanceTab(QWidget):
                 logging.error("status_label not found in AttendanceTab")
 
     def perform_face_check_in(self):
-        """Perform face recognition-based check-in"""
+        """Perform continuous face recognition-based check-in"""
         try:
             # Get the selected class
             class_index = self.class_selector.currentIndex()
             if class_index <= 0:  # 0 is the "Select Class" item
                 QMessageBox.warning(self, "No Class Selected", "Please select a class first")
                 return
-
+        
             class_id = self.class_selector.itemData(class_index)
             class_name = self.class_selector.currentText().split(' - ')[1] if ' - ' in self.class_selector.currentText() else ""
-
+        
+            # Check if camera is already running
+            if hasattr(self, 'camera_running') and self.camera_running:
+                self.stop_face_check_in()
+                return
+            
             # Initialize camera
             import cv2
-            cap = cv2.VideoCapture(0)
-
-            if not cap.isOpened():
+            self.cap = cv2.VideoCapture(0)
+        
+            if not self.cap.isOpened():
                 QMessageBox.critical(self, "Camera Error", "Could not open camera. Please check camera connection.")
                 return
-
-            # Display camera setup message
-            QMessageBox.information(self, "Camera Setup", 
-                                   "Camera will now activate for face recognition.\n"
-                                   "Please position your face in front of the camera.")
-
-            # Take multiple frames to allow camera to adjust
-            for i in range(5):
-                ret, frame = cap.read()
-                if not ret:
+        
+            # Update button text to "Stop Camera"
+            self.face_check_in_btn.setText("Stop Camera")
+            self.face_check_in_btn.setStyleSheet("background-color: #e74c3c; color: white;")
+        
+            # Create frame for camera feed
+            self.camera_frame = QLabel()
+            self.camera_frame.setFixedSize(400, 300)
+            self.camera_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.camera_frame.setStyleSheet("border: 2px solid #ddd;")
+        
+            # Add to layout above attendance table
+            camera_layout = QHBoxLayout()
+            camera_layout.addStretch()
+            camera_layout.addWidget(self.camera_frame)
+            camera_layout.addStretch()
+        
+            # Insert camera layout at position 2 (after actions)
+            layout_count = self.layout().count()
+            for i in range(layout_count):
+                if isinstance(self.layout().itemAt(i).layout(), QHBoxLayout) and \
+                    self.layout().itemAt(i).layout().count() > 0 and \
+                    isinstance(self.layout().itemAt(i).layout().itemAt(0).widget(), QPushButton):
+                    # Found buttons layout, insert camera after it
+                    self.layout().insertLayout(i+1, camera_layout)
                     break
-                # Don't use cv2.waitKey() which is causing issues
-                # Use QTimer.singleShot instead to delay
-                from PyQt6.QtCore import QTimer
-                timer = QTimer()
-                timer.singleShot(100, lambda: None)  # 100ms delay
-                timer.start()
+        
+            # Set flag
+            self.camera_running = True
+        
+            # Create timer for processing frames
+            self.camera_timer = QTimer(self)
+            self.camera_timer.timeout.connect(lambda: self.process_camera_frame(class_id, class_name))
+            self.camera_timer.start(100)  # Process frames every 100ms
+        
+        except Exception as e:
+            logging.error(f"Face check-in setup error: {e}")
+            QMessageBox.critical(self, "Check-in Error", str(e))
+            self.stop_face_check_in()
+            
+    
+    def stop_face_check_in(self):
+        """Stop the face recognition camera"""
+        try:
+            # Reset button
+            self.face_check_in_btn.setText("Face Check-in")
+            self.face_check_in_btn.setStyleSheet("")
+        
+            # Stop timer and release camera
+            if hasattr(self, 'camera_timer') and self.camera_timer:
+                self.camera_timer.stop()
+            
+            if hasattr(self, 'cap') and self.cap:
+                self.cap.release()
+            
+            # Remove camera frame from layout
+            if hasattr(self, 'camera_frame'):
+                self.camera_frame.setParent(None)
+                self.camera_frame.deleteLater()
+            
+            # Reset flag
+            self.camera_running = False
+        
+        except Exception as e:
+            logging.error(f"Error stopping camera: {e}")
 
-            # Capture a frame for face recognition
-            ret, frame = cap.read()
+    def process_camera_frame(self, class_id, class_name):
+        """Process a camera frame for face recognition"""
+        try:
+            # Read frame
+            ret, frame = self.cap.read()
             if not ret:
-                cap.release()
-                QMessageBox.critical(self, "Camera Error", "Could not read camera frame")
                 return
-
-            # Save frame temporarily
-            temp_frame_path = os.path.join(DATA_DIR, "temp_frame.jpg")
-            cv2.imwrite(temp_frame_path, frame)
-
-            # Release camera
-            cap.release()
-
-            # Create progress dialog
-            msg = QMessageBox()
-            msg.setIcon(QMessageBox.Icon.Information)
-            msg.setText("Recognizing face...")
-            msg.setWindowTitle("Face Recognition")
-            msg.setStandardButtons(QMessageBox.StandardButton.NoButton)
-            msg.show()
-
-            # Process using a separate method to avoid UI freezing
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
-
-            try:
-                # Perform face recognition
-                import face_recognition
-                import sqlite3
-
-                # Load the image and find faces
-                image = face_recognition.load_image_file(temp_frame_path)
-                face_locations = face_recognition.face_locations(image)
-
-                if not face_locations:
-                    msg.close()
-                    QMessageBox.warning(self, "No Face Detected", 
-                                    "No face was detected in the camera frame. Please try again.")
-                    return
-
-                # Get face encodings
-                face_encodings = face_recognition.face_encodings(image, face_locations)
-
-                if not face_encodings:
-                    msg.close()
-                    QMessageBox.warning(self, "Encoding Failed", 
-                                    "Failed to encode detected face. Please try again.")
-                    return
-
-                # Compare with known faces
-                student_id = None
-                confidence = 0
-                student_name = ""
-
-                # Get students with face images for comparison
-                students = self.db.get_students()
-
-                # Log the student records for debugging
-                logging.info(f"Retrieved {len(students)} students for face comparison")
-
-                # Loop through students and check for face matches
+            
+            # Convert frame to QImage for display
+            height, width, channel = frame.shape
+            bytes_per_line = 3 * width
+            from PyQt6.QtGui import QImage, QPixmap
+            q_img = QImage(frame.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+        
+            # Display in label
+            self.camera_frame.setPixmap(QPixmap.fromImage(q_img).scaled(
+                self.camera_frame.width(), 
+                self.camera_frame.height(),
+                Qt.AspectRatioMode.KeepAspectRatio
+            ))
+        
+            # Only process for face recognition every 1 second (10 frames at 100ms)
+            if not hasattr(self, 'frame_counter'):
+                self.frame_counter = 0
+            
+            self.frame_counter += 1
+            if self.frame_counter < 10:
+                return
+            
+            self.frame_counter = 0
+        
+            # Process frame for face recognition
+            import face_recognition
+            import sqlite3
+            import os
+        
+            # Convert frame to RGB for face_recognition
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+            # Find faces
+            face_locations = face_recognition.face_locations(rgb_frame)
+        
+            if not face_locations:
+                # No faces detected
+                return
+            
+            # Get face encodings
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+        
+            if not face_encodings:
+                # No encodings possible
+                return
+            
+            # Compare with known faces
+            student_id = None
+            confidence = 0
+            student_name = ""
+        
+            # Get students with face images for comparison
+            students = self.db.get_students()
+        
+            # Check all detected faces against database
+            for face_encoding in face_encodings:
+                # Reset for each face
+                best_match_id = None
+                best_match_name = ""
+                best_confidence = 0
+            
+                # Check against all students
                 for student in students:
-                    # Skip student if no face image path
+                    # Extract face path safely
                     face_path = None
-
                     try:
                         if isinstance(student, dict):
                             face_path = student.get('face_image_path', '')
                             student_id_val = student.get('student_id', 'unknown')
                         elif isinstance(student, sqlite3.Row):
-                            # Try to access by column name first
+                            # Try column name first
                             try:
                                 face_path = student['face_image_path']
                                 student_id_val = student['student_id']
@@ -367,102 +439,121 @@ class AttendanceTab(QWidget):
                             # Try tuple access
                             face_path = student[8] if len(student) > 8 else None
                             student_id_val = student[0] if len(student) > 0 else 'unknown'
-
-                        # Log the face path for debugging
-                        logging.info(f"Checking student {student_id_val}, face path: {face_path}")
-
+                        
                         if not face_path or not os.path.exists(face_path):
-                            logging.info(f"No valid face image path for student {student_id_val}")
                             continue
-
-                        # Load stored face image
-                        known_image = face_recognition.load_image_file(face_path)
-                        known_faces = face_recognition.face_encodings(known_image)
-
-                        if not known_faces:
-                            logging.warning(f"Could not extract face encoding from {face_path}")
-                            continue
-
-                        known_encoding = known_faces[0]
-
+                        
+                        # Check if we already processed this face image
+                        if not hasattr(self, 'face_encodings_cache'):
+                            self.face_encodings_cache = {}
+                        
+                        if face_path in self.face_encodings_cache:
+                            known_encoding = self.face_encodings_cache[face_path]
+                        else:
+                            # Load and cache encoding
+                            known_image = face_recognition.load_image_file(face_path)
+                            known_faces = face_recognition.face_encodings(known_image)
+                        
+                            if not known_faces:
+                                continue
+                            
+                            known_encoding = known_faces[0]
+                            self.face_encodings_cache[face_path] = known_encoding
+                    
                         # Compare faces
-                        matches = face_recognition.compare_faces([known_encoding], face_encodings[0])
-
+                        matches = face_recognition.compare_faces([known_encoding], face_encoding, tolerance=0.6)
+                    
                         if matches and matches[0]:
                             # Calculate face distance (lower is better)
-                            face_distance = face_recognition.face_distance([known_encoding], face_encodings[0])[0]
+                            face_distance = face_recognition.face_distance([known_encoding], face_encoding)[0]
                             current_confidence = 1 - face_distance
-                            logging.info(f"Match found for student {student_id_val} with confidence {current_confidence:.2f}")
-
+                        
                             # If better match than previous, update
-                            if current_confidence > confidence:
-                                confidence = current_confidence
-
+                            if current_confidence > best_confidence:
+                                best_confidence = current_confidence
+                            
                                 # Get student details safely
                                 if isinstance(student, dict):
-                                    student_id = student.get('student_id', '')
-                                    student_name = f"{student.get('first_name', '')} {student.get('last_name', '')}"
+                                    best_match_id = student.get('student_id', '')
+                                    best_match_name = f"{student.get('first_name', '')} {student.get('last_name', '')}"
                                 elif isinstance(student, sqlite3.Row):
                                     try:
-                                        student_id = student['student_id']
-                                        student_name = f"{student['first_name']} {student['last_name']}"
+                                        best_match_id = student['student_id']
+                                        best_match_name = f"{student['first_name']} {student['last_name']}"
                                     except (IndexError, KeyError):
-                                        student_id = student[0]
-                                        student_name = f"{student[1] if len(student) > 1 else ''} {student[2] if len(student) > 2 else ''}"
+                                        best_match_id = student[0]
+                                        best_match_name = f"{student[1] if len(student) > 1 else ''} {student[2] if len(student) > 2 else ''}"
                                 else:
-                                    student_id = student[0]
-                                    student_name = f"{student[1] if len(student) > 1 else ''} {student[2] if len(student) > 2 else ''}"
+                                    best_match_id = student[0]
+                                    best_match_name = f"{student[1] if len(student) > 1 else ''} {student[2] if len(student) > 2 else ''}"
+                
                     except Exception as face_error:
-                        logging.error(f"Error processing face for student: {face_error}")
+                        logging.error(f"Error processing face comparison: {face_error}")
                         continue
-
-                # Close progress dialog
-                msg.close()
-
-                # Check if a student was recognized
-                if student_id and confidence > 0.5:  # 0.5 is the confidence threshold
-                    # Record attendance
-                    from datetime import datetime
-                    check_in_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    notes = f"Face recognition (confidence: {confidence:.1%})"
-
-                    self.db.mark_attendance(
-                        student_id=student_id,
-                        class_id=class_id,
-                        status="Present",
-                        check_in_time=check_in_time,
-                        notes=notes
-                    )
-
-                    # Show success message
-                    QMessageBox.information(self, "Check-in Successful", 
-                                          f"Welcome, {student_name}!\n"
-                                          f"You have been checked in to {class_name}\n"
-                                          f"Confidence: {confidence:.1%}")
-
-                    # Refresh attendance list
-                    self.load_attendance_records()
-                else:
-                    QMessageBox.warning(self, "Not Recognized", 
-                                      "Face not recognized or confidence too low.\n"
-                                      "Please try again or use manual check-in.")
-
-            except Exception as rec_error:
-                msg.close()
-                logging.error(f"Face recognition error: {rec_error}")
-                QMessageBox.critical(self, "Check-in Error", 
-                                   f"Error during face recognition: {str(rec_error)}")
-
-            # Clean up temp file
-            try:
-                if os.path.exists(temp_frame_path):
-                    os.remove(temp_frame_path)
-            except:
-                pass
-
+            
+                # If we found a good match for this face, mark attendance
+                if best_match_id and best_confidence > 0.6:  # 0.6 confidence threshold
+                    # Check if this student was already marked present today
+                    already_present = False
+                
+                    try:
+                        from datetime import datetime
+                        today = datetime.now().strftime("%Y-%m-%d")
+                    
+                        # Get today's attendance records for this class
+                        attendance_records = self.db.get_attendance_records(class_id, today)
+                    
+                        # Check if student is already present
+                        for record in attendance_records:
+                            if isinstance(record, dict) and record.get('student_id') == best_match_id:
+                                already_present = True
+                                break
+                            elif hasattr(record, '__getitem__') and record[1] == best_match_id:  # Assuming student_id is second column
+                                already_present = True
+                                break
+                    
+                        # If not already marked present, mark attendance
+                        if not already_present:
+                            # Get current time for check-in
+                            check_in_time = datetime.now()
+                        
+                            # Process attendance
+                            self.process_attendance_check_in(
+                                student_id=best_match_id,
+                                class_id=class_id,
+                                check_in_time=check_in_time,
+                                is_face_recognition=True,
+                                confidence=best_confidence
+                            )
+                        
+                            # Draw green rectangle around recognized face
+                            top, right, bottom, left = face_locations[0]
+                            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                        
+                            # Display recognized student name
+                            cv2.putText(
+                                frame, 
+                                f"{best_match_name} ({best_match_id})", 
+                                (left, top - 10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 
+                                0.5, 
+                                (0, 255, 0), 
+                                2
+                            )
+                        
+                            # Update frame display
+                            q_img = QImage(frame.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+                            self.camera_frame.setPixmap(QPixmap.fromImage(q_img).scaled(
+                                self.camera_frame.width(), 
+                                self.camera_frame.height(),
+                                Qt.AspectRatioMode.KeepAspectRatio
+                            ))
+                
+                    except Exception as record_error:
+                        logging.error(f"Error recording attendance: {record_error}")
+    
         except Exception as e:
-            logging.error(f"Face check-in error: {e}")
-            QMessageBox.critical(self, "Check-in Error", str(e))
+            logging.error(f"Error processing camera frame: {e}")
 
     def manual_check_in(self):
         """Open dialog for manual student check-in"""
@@ -472,17 +563,17 @@ class AttendanceTab(QWidget):
             if class_index <= 0:  # 0 is the "Select Class" item
                 QMessageBox.warning(self, "No Class Selected", "Please select a class first")
                 return
-
+            
             class_id = self.class_selector.itemData(class_index)
-
+        
             # Create manual check-in dialog
             dialog = QDialog(self)
             dialog.setWindowTitle("Manual Check-in")
             dialog.setMinimumWidth(300)
-
+        
             # Dialog layout
             layout = QVBoxLayout(dialog)
-
+        
             # Student ID input
             student_id_layout = QHBoxLayout()
             student_id_label = QLabel("Student ID:")
@@ -490,7 +581,7 @@ class AttendanceTab(QWidget):
             student_id_layout.addWidget(student_id_label)
             student_id_layout.addWidget(student_id_input)
             layout.addLayout(student_id_layout)
-
+        
             # Buttons
             buttons_layout = QHBoxLayout()
             check_in_btn = QPushButton("Check In")
@@ -498,15 +589,109 @@ class AttendanceTab(QWidget):
             buttons_layout.addWidget(check_in_btn)
             buttons_layout.addWidget(cancel_btn)
             layout.addLayout(buttons_layout)
-
+        
             # Connect buttons
-            check_in_btn.clicked.connect(lambda: self.process_manual_check_in(student_id_input.text(), class_id))
+            check_in_btn.clicked.connect(lambda: self.process_attendance_check_in(
+                student_id=student_id_input.text(), 
+                class_id=class_id
+            ))
             check_in_btn.clicked.connect(dialog.accept)
             cancel_btn.clicked.connect(dialog.reject)
-
+        
             # Show dialog
             dialog.exec()
-
+        
         except Exception as e:
             logging.error(f"Manual check-in error: {e}")
             QMessageBox.critical(self, "Error", f"Failed to open manual check-in: {str(e)}")
+            
+    def process_attendance_check_in(self, student_id, class_id, check_in_time=None, is_face_recognition=False, confidence=None):
+        """Process attendance check-in with lateness detection and note handling"""
+        try:
+            if not student_id or not class_id:
+                QMessageBox.warning(self, "Error", "Please provide both student ID and class ID")
+                return
+
+            # Get current date and time if not provided
+            from datetime import datetime
+            if not check_in_time:
+                check_in_time = datetime.now()
+            
+            check_in_time_str = check_in_time.strftime("%Y-%m-%d %H:%M:%S")
+        
+            # Get class schedule to determine if student is late
+            class_schedules = self.db.get_class_schedules(class_id)
+            is_late = False
+            late_minutes = 0
+        
+            if class_schedules:
+                # Find today's schedule
+                today_weekday = check_in_time.strftime("%A")  # Monday, Tuesday, etc.
+                today_schedule = None
+            
+                for schedule in class_schedules:
+                    if schedule.get('day_of_week') == today_weekday:
+                        today_schedule = schedule
+                        break
+            
+                if today_schedule:
+                    # Check if student is late
+                    start_time_str = today_schedule.get('start_time')
+                    if start_time_str:
+                        # Parse schedule start time
+                        schedule_time = datetime.strptime(start_time_str, "%H:%M").time()
+                        class_start = datetime.combine(check_in_time.date(), schedule_time)
+                    
+                        # Calculate minutes late
+                        if check_in_time > class_start:
+                            time_diff = check_in_time - class_start
+                            late_minutes = time_diff.seconds // 60
+                            if late_minutes > 5:  # More than 5 minutes late is considered "Late"
+                                is_late = True
+                            
+            # Determine attendance status
+            status = "Late" if is_late else "Present"
+        
+            # Prepare notes
+            notes = ""
+            if is_face_recognition and confidence:
+                notes = f"Face recognition (confidence: {confidence:.1%})"
+        
+            # For late students, prompt for a reason
+            if is_late:
+                from PyQt6.QtWidgets import QInputDialog
+                reason, ok = QInputDialog.getText(
+                    self, 
+                    "Late Arrival", 
+                    f"Student is {late_minutes} minutes late. Please enter a reason:",
+                    QLineEdit.EchoMode.Normal
+                )
+            
+                if ok and reason:
+                    notes = f"Late by {late_minutes} minutes. Reason: {reason}" + (f" {notes}" if notes else "")
+                else:
+                    notes = f"Late by {late_minutes} minutes." + (f" {notes}" if notes else "")
+        
+            # Mark attendance in database
+            self.db.mark_attendance(
+                class_id=class_id,
+                student_id=student_id,
+                status=status,
+                check_in_time=check_in_time_str,
+                notes=notes
+            )
+        
+            # Show success message
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Attendance for student {student_id} marked as {status}" + 
+                (f" ({late_minutes} minutes late)" if is_late else "")
+            )
+        
+            # Refresh attendance records
+            self.load_attendance_records()
+    
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to process check-in: {str(e)}")
+            logging.error(f"Attendance check-in error: {e}")

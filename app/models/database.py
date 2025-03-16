@@ -1122,6 +1122,68 @@ class Database:
                 (student_id,),
             )
         return cursor.fetchall()
+    
+    
+    def get_class_schedules(self, class_id):
+        """
+        Get schedules for a specific class
+    
+        :param class_id: ID of the class
+        :return: List of schedule dictionaries
+        """
+        try:
+            cursor = self.connection.cursor()
+        
+            cursor.execute(
+                """
+                SELECT 
+                    id,
+                    class_id,
+                    day_of_week,
+                    start_time,
+                    end_time,
+                    room,
+                    created_at,
+                    updated_at
+                FROM class_schedules
+                WHERE class_id = ?
+                ORDER BY 
+                    CASE 
+                        WHEN day_of_week = 'Monday' THEN 1
+                        WHEN day_of_week = 'Tuesday' THEN 2
+                        WHEN day_of_week = 'Wednesday' THEN 3
+                        WHEN day_of_week = 'Thursday' THEN 4
+                        WHEN day_of_week = 'Friday' THEN 5
+                        WHEN day_of_week = 'Saturday' THEN 6
+                        WHEN day_of_week = 'Sunday' THEN 7
+                    END,
+                    start_time
+                """,
+                (class_id,)
+            )
+        
+            schedules = []
+            for row in cursor.fetchall():
+                if isinstance(row, sqlite3.Row):
+                    schedule = {}
+                    for key in row.keys():
+                        schedule[key] = row[key]
+                else:
+                    schedule = {
+                        'id': row[0],
+                        'class_id': row[1],
+                        'day_of_week': row[2],
+                        'start_time': row[3],
+                        'end_time': row[4],
+                        'room': row[5]
+                    }
+                schedules.append(schedule)
+            
+            return schedules
+        
+        except sqlite3.Error as e:
+            logging.error(f"Error getting class schedules: {e}")
+            return []
 
     # Behavior operations
     def record_behavior(self, class_id, student_id, behavior_type, behavior_value):
